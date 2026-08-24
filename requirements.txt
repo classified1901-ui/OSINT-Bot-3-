@@ -3,3 +3,4 @@ aiohttp
 holehe
 sherlock-project
 maigret
+socialscan
