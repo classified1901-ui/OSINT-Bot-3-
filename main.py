@@ -19,7 +19,7 @@ fake = Faker()
 
 ALLOWED_ROLE_NAME = "Bot Search Access"
 ALLOWED_USERS = {
-1100376229544202263,  # ← غيّر الرقم ده لـ User ID بتاعك
+110037622954420226,  # ← غيّر الرقم ده لـ User ID بتاعك
 }
 
 intents = discord.Intents.default()
