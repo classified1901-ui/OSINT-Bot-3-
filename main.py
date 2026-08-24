@@ -22,7 +22,7 @@ ALLOWED_USERS = {
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 def is_allowed(ctx):
     if ctx.author.id in ALLOWED_USERS:
