@@ -327,7 +327,7 @@ async def email_cmd(ctx, email: str):
     msg = await ctx.reply("Searching email...")
     try:
         result = await email_osint(email)
-        await send_long(msg, result)
+      await send_long(msg, result)
     except Exception as e:
         await msg.edit(content=f"Error: {e}")
 
