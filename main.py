@@ -271,4 +271,7 @@ def discord_id_lookup(user_id):
             f"• https://discord.id/?id={uid}\n"
             f"• https://discordlookup.com/user/{uid}\n"
             f"• https://discord.com/users/{uid}\n\n"
-            f"⚠️ Only public creation date +
+            f"⚠️ Only public creation date + links. Cannot retrieve email or private data."
+        )
+    except Exception as e:
+        return f"❌ Invalid Discord ID or error: {e}"
