@@ -7,3 +7,4 @@ socialscan
 phonenumbers
 Faker
 dnspython
+user-scanner
