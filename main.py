@@ -6,6 +6,7 @@ import subprocess
 import hashlib
 import aiohttp
 import dns.resolver
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import phonenumbers
@@ -13,12 +14,12 @@ from phonenumbers import geocoder, carrier, timezone as phone_tz
 from faker import Faker
 from urllib.parse import quote_plus
 
-executor = ThreadPoolExecutor(max_workers=3)
+executor = ThreadPoolExecutor(max_workers=2)
 fake = Faker()
 
 ALLOWED_ROLE_NAME = "Bot Search Access"
 ALLOWED_USERS = {
-   1100376229544202263,  # ← غيّر الرقم ده لـ User ID بتاعك
+1100376229544202263,  # ← غيّر الرقم ده لـ User ID بتاعك
 }
 
 intents = discord.Intents.default()
@@ -52,6 +53,9 @@ async def send_long(msg, text, max_len=1900):
     for chunk in chunks[1:]:
         await msg.channel.send(chunk)
 
+def clean_ansi(text):
+    return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+
 async def check_gravatar(email):
     email = email.strip().lower()
     h = hashlib.md5(email.encode()).hexdigest()
@@ -68,21 +72,13 @@ async def check_gravatar(email):
 def clean_holehe(output):
     lines = output.splitlines()
     found = []
-    not_found = []
     for line in lines:
         line = line.strip()
         if line.startswith("[+]"):
             found.append(line)
-        elif line.startswith("[-]") or line.startswith("[x]"):
-            not_found.append(line)
-    result = []
     if found:
-        result.append("**Registered on:**")
-        result.extend(found[:25])
-    if not found:
-        result.append("\n**Not found / checked:**")
-        result.extend(not_found[:15])
-    return "\n".join(result) if result else "No clear results"
+        return "**Registered on:**\n" + "\n".join(found[:30])
+    return "No clear positive results"
 
 def run_holehe(email):
     try:
@@ -119,6 +115,31 @@ def run_socialscan(query):
     except Exception as e:
         return f"socialscan error: {e}"
 
+def run_user_scanner(target, is_email=True):
+    try:
+        if is_email:
+            cmd = ["user-scanner", "-e", target, "--no-nsfw"]
+        else:
+            cmd = ["user-scanner", "-u", target, "--no-nsfw"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        output = clean_ansi(r.stdout + "\n" + r.stderr)
+        lines = [line for line in output.splitlines() if line.strip()]
+        # نحتفظ بالنتائج المفيدة فقط
+        useful = []
+        for line in lines:
+            lower = line.lower()
+            if any(x in lower for x in ["found", "exists", "registered", "taken", "http", "https", "[+]", "profile", "username", "email"]):
+                useful.append(line)
+            elif "error" in lower or "timeout" in lower:
+                useful.append(line)
+        if useful:
+            return "\n".join(useful[:80])
+        return output[:3000] if output else "No useful results or scan failed"
+    except subprocess.TimeoutExpired:
+        return "⏱️ Scan timed out (too long). Try again later or use lighter tools (!email / !user)."
+    except Exception as e:
+        return f"user-scanner error: {e}"
+
 def analyze_phone(number):
     try:
         if not number.startswith("+"):
@@ -147,8 +168,7 @@ def analyze_phone(number):
             f"https://www.google.com/search?q=%22{quote_plus(e164)}%22",
             f"https://www.google.com/search?q=%22{quote_plus(international)}%22",
             f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(site:facebook.com+OR+site:instagram.com+OR+site:twitter.com+OR+site:x.com)",
-            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(filetype:pdf+OR+filetype:xls+OR+filetype:csv)",
-            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(site:pastebin.com+OR+site:ghostbin.com)",
+            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(filetype:pdf+OR+filetype:xls)",
             f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+site:truecaller.com",
         ]
         return (
@@ -163,13 +183,12 @@ def analyze_phone(number):
             f"**Line Type:** {line_type}\n"
             f"**Timezone:** {tz}\n\n"
             f"**WhatsApp:** {wa}\n\n"
-            f"**Google Dorks & Links:**\n"
-            f"1. Exact: {dorks[0]}\n"
-            f"2. International: {dorks[1]}\n"
+            f"**Google Dorks:**\n"
+            f"1. {dorks[0]}\n"
+            f"2. {dorks[1]}\n"
             f"3. Social: {dorks[2]}\n"
             f"4. Documents: {dorks[3]}\n"
-            f"5. Pastes: {dorks[4]}\n"
-            f"6. Truecaller search: {dorks[5]}"
+            f"5. Truecaller: {dorks[4]}"
         )
     except Exception as e:
         return f"❌ Error: {e}"
@@ -222,7 +241,7 @@ async def domain_osint(domain):
                 if resp.status == 200:
                     data = await resp.json()
                     subs = set()
-                    for entry in data[:60]:
+                    for entry in data[:50]:
                         name = entry.get("name_value", "")
                         for line in name.split("\n"):
                             line = line.strip().lower()
@@ -230,12 +249,10 @@ async def domain_osint(domain):
                                 subs.add(line)
                     if subs:
                         result.append("\n**Subdomains (crt.sh):**")
-                        for s in sorted(list(subs))[:30]:
+                        for s in sorted(list(subs))[:25]:
                             result.append(f"- {s}")
                     else:
                         result.append("\n**Subdomains:** No results")
-                else:
-                    result.append("\n**Subdomains:** Failed to fetch")
     except Exception as e:
         result.append(f"\n**Subdomains error:** {e}")
     return "\n".join(result)
@@ -254,187 +271,4 @@ def discord_id_lookup(user_id):
             f"• https://discord.id/?id={uid}\n"
             f"• https://discordlookup.com/user/{uid}\n"
             f"• https://discord.com/users/{uid}\n\n"
-            f"⚠️ Only public creation date + links. Cannot retrieve email or private data."
-        )
-    except Exception as e:
-        return f"❌ Invalid Discord ID or error: {e}"
-
-def generate_dorks(query):
-    q = quote_plus(query)
-    return (
-        f"**Google Dorks for:** `{query}`\n\n"
-        f"1. Exact match:\nhttps://www.google.com/search?q=%22{q}%22\n\n"
-        f"2. Social media:\nhttps://www.google.com/search?q=%22{q}%22+(site:facebook.com+OR+site:instagram.com+OR+site:twitter.com+OR+site:x.com+OR+site:linkedin.com)\n\n"
-        f"3. Documents:\nhttps://www.google.com/search?q=%22{q}%22+(filetype:pdf+OR+filetype:doc+OR+filetype:xls+OR+filetype:txt)\n\n"
-        f"4. Pastes:\nhttps://www.google.com/search?q=%22{q}%22+(site:pastebin.com+OR+site:ghostbin.com)\n\n"
-        f"5. GitHub:\nhttps://www.google.com/search?q=%22{q}%22+site:github.com"
-    )
-
-def generate_search_links(query):
-    q = quote_plus(query)
-    return (
-        f"**General Search for:** `{query}`\n\n"
-        f"**Google:**\nhttps://www.google.com/search?q={q}\n\n"
-        f"**DuckDuckGo:**\nhttps://duckduckgo.com/?q={q}\n\n"
-        f"**Bing:**\nhttps://www.bing.com/search?q={q}\n\n"
-        f"**Yandex:**\nhttps://yandex.com/search/?text={q}\n\n"
-        f"**Google (exact phrase):**\nhttps://www.google.com/search?q=%22{q}%22"
-    )
-
-def generate_fake_persona():
-    return (
-        f"**[FAKE PERSONA - TRAINING ONLY]**\n\n"
-        f"**Full Name:** {fake.name()}\n"
-        f"**Username 1:** {fake.user_name()}\n"
-        f"**Username 2:** {fake.user_name()}\n"
-        f"**Email:** {fake.email()}\n"
-        f"**Secondary Email:** {fake.free_email()}\n"
-        f"**Phone:** {fake.phone_number()}\n"
-        f"**Address:** {fake.address().replace(chr(10), ', ')}\n"
-        f"**City / Country:** {fake.city()}, {fake.country()}\n"
-        f"**Job Title:** {fake.job()}\n"
-        f"**Company:** {fake.company()}\n"
-        f"**Website:** {fake.url()}\n"
-        f"**Date of Birth:** {fake.date_of_birth(minimum_age=18, maximum_age=60)}\n"
-        f"**Bio:** {fake.text(max_nb_chars=120)}\n\n"
-        f"**Fake Card (training):** {fake.credit_card_number()} | Exp: {fake.credit_card_expire()} | CVV: {fake.credit_card_security_code()}\n\n"
-        f"⚠️ Completely synthetic data. For social engineering awareness and defense training only."
-    )
-
-async def email_osint(email):
-    gravatar = await check_gravatar(email)
-    loop = asyncio.get_event_loop()
-    holehe_res = await loop.run_in_executor(executor, run_holehe, email)
-    social_res = await loop.run_in_executor(executor, run_socialscan, email)
-    return (
-        f"**Email OSINT:** `{email}`\n\n"
-        f"**Gravatar:**\n{gravatar}\n\n"
-        f"**Holehe Results:**\n{holehe_res}\n\n"
-        f"**socialscan:**\n```\n{social_res}\n```"
-    )
-
-async def username_osint(username):
-    loop = asyncio.get_event_loop()
-    sherlock_res = await loop.run_in_executor(executor, run_sherlock, username)
-    maigret_res = await loop.run_in_executor(executor, run_maigret, username)
-    social_res = await loop.run_in_executor(executor, run_socialscan, username)
-    return (
-        f"**Username OSINT:** `{username}`\n\n"
-        f"**Sherlock:**\n```\n{sherlock_res}\n```\n\n"
-        f"**Maigret:**\n```\n{maigret_res}\n```\n\n"
-        f"**socialscan:**\n```\n{social_res}\n```"
-    )
-
-@bot.event
-async def on_ready():
-    print(f"Bot is online: {bot.user}")
-
-@bot.command(name="help")
-async def help_cmd(ctx):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    embed = discord.Embed(title="OSINT Bot Commands", color=0x2b2d31)
-    embed.add_field(name="!email <email>", value="Email registration check (Holehe + more)", inline=False)
-    embed.add_field(name="!user <username>", value="Username multi-tool search", inline=False)
-    embed.add_field(name="!phone <number>", value="Phone analysis + dorks + links", inline=False)
-    embed.add_field(name="!ip <ip>", value="IP geolocation + ISP + proxy", inline=False)
-    embed.add_field(name="!domain <domain>", value="DNS records + subdomains", inline=False)
-    embed.add_field(name="!discord <ID>", value="Discord account creation date + lookup links", inline=False)
-    embed.add_field(name="!dork <query>", value="Generate Google Dorks", inline=False)
-    embed.add_field(name="!search <query>", value="Multi-engine search links", inline=False)
-    embed.add_field(name="!fake", value="Advanced fake persona (SE training)", inline=False)
-    embed.set_footer(text="Authorized only • Public OSINT • Educational use")
-    await ctx.reply(embed=embed)
-
-@bot.command(name="email")
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def email_cmd(ctx, email: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    if "@" not in email:
-        return await ctx.reply("Invalid email.")
-    msg = await ctx.reply("Searching email...")
-    try:
-        result = await email_osint(email)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="user")
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def user_cmd(ctx, username: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    msg = await ctx.reply("Searching username...")
-    try:
-        result = await username_osint(username)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="phone")
-@commands.cooldown(1, 20, commands.BucketType.user)
-async def phone_cmd(ctx, *, number: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    msg = await ctx.reply("Analyzing phone...")
-    try:
-        result = analyze_phone(number)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="ip")
-@commands.cooldown(1, 15, commands.BucketType.user)
-async def ip_cmd(ctx, ip: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    msg = await ctx.reply("Looking up IP...")
-    try:
-        result = await lookup_ip(ip)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="domain")
-@commands.cooldown(1, 30, commands.BucketType.user)
-async def domain_cmd(ctx, domain: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    msg = await ctx.reply("Analyzing domain...")
-    try:
-        result = await domain_osint(domain)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="discord")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def discord_cmd(ctx, user_id: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    result = discord_id_lookup(user_id)
-    await ctx.reply(result)
-
-@bot.command(name="dork")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def dork_cmd(ctx, *, query: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    await ctx.reply(generate_dorks(query))
-
-@bot.command(name="search")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def search_cmd(ctx, *, query: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    await ctx.reply(generate_search_links(query))
-
-@bot.command(name="fake")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def fake_cmd(ctx):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    await ctx.reply(generate_fake_persona())
-
-bot.run(os.environ["DISCORD_TOKEN"])
+            f"⚠️ Only public creation date +
