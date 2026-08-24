@@ -6,3 +6,4 @@ maigret
 socialscan
 phonenumbers
 Faker
+dnspython
