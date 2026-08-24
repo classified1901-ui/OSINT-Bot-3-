@@ -5,6 +5,7 @@ import asyncio
 import subprocess
 import hashlib
 import aiohttp
+import dns.resolver
 from concurrent.futures import ThreadPoolExecutor
 import phonenumbers
 from phonenumbers import geocoder, carrier, timezone
@@ -19,6 +20,9 @@ ALLOWED_ROLE_NAME = "Bot Search Access"
 ALLOWED_USERS = {
     123456789012345678,   # ← غيّر الرقم ده لـ User ID بتاعك
 }
+
+# اختياري: حط ID قناة عشان يسجل فيها عمليات البحث (سيبه 0 لو مش عايز)
+LOG_CHANNEL_ID = 0
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -50,6 +54,18 @@ async def send_long(msg, text, max_len=1900):
     await msg.edit(content=chunks[0])
     for chunk in chunks[1:]:
         await msg.channel.send(chunk)
+
+async def log_search(ctx, command_name, target):
+    if LOG_CHANNEL_ID == 0:
+        return
+    try:
+        channel = bot.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            await channel.send(f"**Log:** `{ctx.author}` used `{command_name}` on `{target}`")
+    except:
+        pass
+
+# ========== أدوات المساعدة ==========
 
 async def check_gravatar(email):
     email = email.strip().lower()
@@ -123,22 +139,18 @@ def analyze_phone(number):
         car = carrier.name_for_number(parsed, "en") or "Unknown"
         tz = ", ".join(timezone.time_zones_for_number(parsed)) or "Unknown"
         num_type = phonenumbers.number_type(parsed)
-        type_map = {
-            0: "Fixed line", 1: "Mobile", 2: "Fixed or Mobile",
-            3: "Toll free", 4: "Premium rate", 5: "Shared cost",
-            6: "VoIP", 7: "Personal number", 8: "Pager",
-            9: "UAN", 10: "Voicemail", 99: "Unknown"
-        }
+        type_map = {0: "Fixed line", 1: "Mobile", 2: "Fixed or Mobile", 3: "Toll free", 4: "Premium rate", 5: "Shared cost", 6: "VoIP", 7: "Personal number", 8: "Pager", 9: "UAN", 10: "Voicemail", 99: "Unknown"}
         line_type = type_map.get(num_type, "Unknown")
         e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
         international = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
         national = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.NATIONAL)
-        wa_link = f"https://wa.me/{e164.replace('+', '')}"
+        wa = f"https://wa.me/{e164.replace('+', '')}"
         dorks = [
-            f'https://www.google.com/search?q=%22{quote_plus(e164)}%22',
-            f'https://www.google.com/search?q=%22{quote_plus(international)}%22',
-            f'https://www.google.com/search?q=%22{quote_plus(e164)}%22+(site:facebook.com+OR+site:instagram.com+OR+site:twitter.com+OR+site:x.com)',
-            f'https://www.google.com/search?q=%22{quote_plus(e164)}%22+(filetype:pdf+OR+filetype:xls)',
+            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22",
+            f"https://www.google.com/search?q=%22{quote_plus(international)}%22",
+            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(site:facebook.com+OR+site:instagram.com+OR+site:twitter.com+OR+site:x.com)",
+            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+(filetype:pdf+OR+filetype:xls+OR+filetype:csv)",
+            f"https://www.google.com/search?q=%22{quote_plus(e164)}%22+site:pastebin.com+OR+site:ghostbin.com",
         ]
         return (
             f"**Phone OSINT**\n\n"
@@ -151,12 +163,13 @@ def analyze_phone(number):
             f"**Carrier:** {car}\n"
             f"**Line Type:** {line_type}\n"
             f"**Timezone:** {tz}\n\n"
-            f"**WhatsApp:** {wa_link}\n\n"
+            f"**WhatsApp:** {wa}\n\n"
             f"**Google Dorks:**\n"
-            f"1. {dorks[0]}\n"
-            f"2. {dorks[1]}\n"
+            f"1. Exact: {dorks[0]}\n"
+            f"2. International: {dorks[1]}\n"
             f"3. Social: {dorks[2]}\n"
-            f"4. Documents: {dorks[3]}"
+            f"4. Documents: {dorks[3]}\n"
+            f"5. Pastes: {dorks[4]}"
         )
     except Exception as e:
         return f"❌ Error: {e}"
@@ -187,6 +200,62 @@ async def lookup_ip(ip):
         )
     except Exception as e:
         return f"❌ IP error: {e}"
+
+async def domain_osint(domain):
+    domain = domain.lower().strip().replace("http://", "").replace("https://", "").split("/")[0]
+    result = [f"**Domain OSINT:** `{domain}`\n"]
+
+    # DNS Records
+    try:
+        result.append("**DNS Records:**")
+        for rtype in ["A", "AAAA", "MX", "NS", "TXT", "CNAME"]:
+            try:
+                answers = dns.resolver.resolve(domain, rtype)
+                for rdata in answers:
+                    result.append(f"`{rtype}` → {rdata.to_text()}")
+            except:
+                pass
+    except Exception as e:
+        result.append(f"DNS error: {e}")
+
+    # Subdomains from crt.sh
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    subs = set()
+                    for entry in data[:80]:
+                        name = entry.get("name_value", "")
+                        for line in name.split("\n"):
+                            line = line.strip().lower()
+                            if domain in line and "*" not in line:
+                                subs.add(line)
+                    if subs:
+                        result.append("\n**Subdomains (crt.sh):**")
+                        for s in sorted(list(subs))[:40]:
+                            result.append(f"- {s}")
+                    else:
+                        result.append("\n**Subdomains:** No results")
+                else:
+                    result.append("\n**Subdomains:** Failed to fetch")
+    except Exception as e:
+        result.append(f"\n**Subdomains error:** {e}")
+
+    return "\n".join(result)
+
+def generate_dorks(query):
+    q = quote_plus(query)
+    return (
+        f"**Google Dorks for:** `{query}`\n\n"
+        f"1. Exact match:\nhttps://www.google.com/search?q=%22{q}%22\n\n"
+        f"2. Social media:\nhttps://www.google.com/search?q=%22{q}%22+(site:facebook.com+OR+site:instagram.com+OR+site:twitter.com+OR+site:x.com+OR+site:linkedin.com)\n\n"
+        f"3. Documents:\nhttps://www.google.com/search?q=%22{q}%22+(filetype:pdf+OR+filetype:doc+OR+filetype:xls+OR+filetype:txt)\n\n"
+        f"4. Pastes & leaks:\nhttps://www.google.com/search?q=%22{q}%22+(site:pastebin.com+OR+site:ghostbin.com+OR+site:hastebin.com)\n\n"
+        f"5. Code & GitHub:\nhttps://www.google.com/search?q=%22{q}%22+site:github.com\n\n"
+        f"6. Index of:\nhttps://www.google.com/search?q=intitle:%22index+of%22+%22{q}%22"
+    )
 
 def generate_fake_persona():
     return (
@@ -226,6 +295,8 @@ async def username_osint(username):
         f"**socialscan:**\n```\n{social_res}\n```"
     )
 
+# ========== الأوامر ==========
+
 @bot.event
 async def on_ready():
     print(f"Bot is online: {bot.user}")
@@ -234,15 +305,16 @@ async def on_ready():
 async def help_cmd(ctx):
     if not is_allowed(ctx):
         return await ctx.reply("⛔ Not authorized.")
-    await ctx.reply(
-        "**OSINT Bot Commands**\n\n"
-        "`!email <email>` → Email check\n"
-        "`!user <username>` → Username search\n"
-        "`!phone <number>` → Phone analysis\n"
-        "`!ip <ip>` → IP lookup\n"
-        "`!fake` → Fake persona (training)\n"
-        "`!help` → This message"
-    )
+    embed = discord.Embed(title="OSINT Bot Commands", color=0x2b2d31)
+    embed.add_field(name="!email <email>", value="Email registration check", inline=False)
+    embed.add_field(name="!user <username>", value="Username search (multi-tool)", inline=False)
+    embed.add_field(name="!phone <number>", value="Phone analysis + dorks", inline=False)
+    embed.add_field(name="!ip <ip>", value="IP geolocation + ISP", inline=False)
+    embed.add_field(name="!domain <domain>", value="DNS + Subdomains", inline=False)
+    embed.add_field(name="!dork <query>", value="Generate Google Dorks", inline=False)
+    embed.add_field(name="!fake", value="Fake persona (SE training)", inline=False)
+    embed.set_footer(text="Authorized users only • Public OSINT tools")
+    await ctx.reply(embed=embed)
 
 @bot.command(name="email")
 @commands.cooldown(1, 60, commands.BucketType.user)
@@ -251,6 +323,7 @@ async def email_cmd(ctx, email: str):
         return await ctx.reply("⛔ Not authorized.")
     if "@" not in email:
         return await ctx.reply("Invalid email.")
+    await log_search(ctx, "email", email)
     msg = await ctx.reply("Searching email...")
     try:
         result = await email_osint(email)
@@ -263,6 +336,7 @@ async def email_cmd(ctx, email: str):
 async def user_cmd(ctx, username: str):
     if not is_allowed(ctx):
         return await ctx.reply("⛔ Not authorized.")
+    await log_search(ctx, "user", username)
     msg = await ctx.reply("Searching username...")
     try:
         result = await username_osint(username)
@@ -275,30 +349,8 @@ async def user_cmd(ctx, username: str):
 async def phone_cmd(ctx, *, number: str):
     if not is_allowed(ctx):
         return await ctx.reply("⛔ Not authorized.")
+    await log_search(ctx, "phone", number)
     msg = await ctx.reply("Analyzing phone...")
     try:
         result = analyze_phone(number)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="ip")
-@commands.cooldown(1, 15, commands.BucketType.user)
-async def ip_cmd(ctx, ip: str):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    msg = await ctx.reply("Looking up IP...")
-    try:
-        result = await lookup_ip(ip)
-        await send_long(msg, result)
-    except Exception as e:
-        await msg.edit(content=f"Error: {e}")
-
-@bot.command(name="fake")
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def fake_cmd(ctx):
-    if not is_allowed(ctx):
-        return await ctx.reply("⛔ Not authorized.")
-    await ctx.reply(generate_fake_persona())
-
-bot.run(os.environ["DISCORD_TOKEN"])
+        await send_long(msg, result
