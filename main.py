@@ -257,19 +257,3 @@ async def domain_osint(domain):
         result.append(f"\n**Subdomains error:** {e}")
     return "\n".join(result)
 
-def discord_id_lookup(user_id):
-    try:
-        uid = int(user_id)
-        timestamp_ms = (uid >> 22) + 1420070400000
-        created = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-        created_str = created.strftime("%Y-%m-%d %H:%M:%S UTC")
-        msg = "**Discord User ID Lookup**\n\n"
-        msg += "**ID:** `" + str(uid) + "`\n"
-        msg += "**Account Created:** " + created_str + "\n\n"
-        msg += "**Public Lookup Links:**\n"
-        msg += "• https://discord.id/?id=" + str(uid) + "\n"
-        msg += "• https://discordlookup.com/user/" + str(uid) + "\n"
-        msg += "• https://discord.com/users/" + str(uid) + "\n\n"
-        return msg
-    except Exception as e:
-        return "Invalid Discord ID or error: " + str(e)
