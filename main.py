@@ -7,7 +7,7 @@ import hashlib
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 
-executor = ThreadPoolExecutor(max_workers=2)
+executor = ThreadPoolExecutor(max_workers=3)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -35,56 +35,77 @@ def clean_holehe(output):
             clean.append(line)
         elif "websites checked" in line.lower():
             clean.append(line)
-    if not clean:
-        return "No clear results found"
-    return "\n".join(clean[:30])
+    return "\n".join(clean[:25]) if clean else "No clear results"
 
-def run_holehe_sync(email):
+def run_holehe(email):
     try:
-        r = subprocess.run(
-            ["holehe", email, "--only-used", "--no-color"],
-            capture_output=True, text=True, timeout=50
-        )
+        r = subprocess.run(["holehe", email, "--only-used", "--no-color"],
+                           capture_output=True, text=True, timeout=50)
         return clean_holehe(r.stdout)
-    except subprocess.TimeoutExpired:
-        return "⏱️ Holehe timed out"
     except Exception as e:
         return f"Holehe error: {e}"
 
-def run_sherlock_sync(username):
+def run_sherlock(username):
     try:
-        r = subprocess.run(
-            ["sherlock", username, "--print-found", "--timeout", "8", "--no-color"],
-            capture_output=True, text=True, timeout=60
-        )
+        r = subprocess.run(["sherlock", username, "--print-found", "--timeout", "7", "--no-color"],
+                           capture_output=True, text=True, timeout=55)
         out = r.stdout.strip()
-        return out[:1400] if out else "No results from Sherlock"
-    except subprocess.TimeoutExpired:
-        return "⏱️ Sherlock timed out"
+        return out[:1200] if out else "No results"
     except Exception as e:
         return f"Sherlock error: {e}"
+
+def run_maigret(username):
+    try:
+        r = subprocess.run(["maigret", username, "--no-color", "--timeout", "8"],
+                           capture_output=True, text=True, timeout=80)
+        out = r.stdout.strip()
+        return out[:1500] if out else "No results"
+    except Exception as e:
+        return f"Maigret error: {e}"
+
+def run_socialscan(query):
+    try:
+        r = subprocess.run(["socialscan", query],
+                           capture_output=True, text=True, timeout=25)
+        out = r.stdout.strip()
+        return out[:800] if out else "No results"
+    except Exception as e:
+        return f"socialscan error: {e}"
 
 async def email_osint(email):
     gravatar = await check_gravatar(email)
     loop = asyncio.get_event_loop()
-    holehe = await loop.run_in_executor(executor, run_holehe_sync, email)
-    return f"**Email OSINT for:** `{email}`\n\n**Gravatar:**\n{gravatar}\n\n**Holehe:**\n```\n{holehe}\n```"
+    holehe_res = await loop.run_in_executor(executor, run_holehe, email)
+    social_res = await loop.run_in_executor(executor, run_socialscan, email)
+    return (
+        f"**Email OSINT:** `{email}`\n\n"
+        f"**Gravatar:**\n{gravatar}\n\n"
+        f"**Holehe:**\n```\n{holehe_res}\n```\n\n"
+        f"**socialscan:**\n```\n{social_res}\n```"
+    )
 
 async def username_osint(username):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(executor, run_sherlock_sync, username)
-    return f"**Username OSINT for:** `{username}`\n```\n{result}\n```"
+    sherlock_res = await loop.run_in_executor(executor, run_sherlock, username)
+    maigret_res = await loop.run_in_executor(executor, run_maigret, username)
+    social_res = await loop.run_in_executor(executor, run_socialscan, username)
+    return (
+        f"**Username OSINT:** `{username}`\n\n"
+        f"**Sherlock:**\n```\n{sherlock_res}\n```\n\n"
+        f"**Maigret (deep):**\n```\n{maigret_res}\n```\n\n"
+        f"**socialscan:**\n```\n{social_res}\n```"
+    )
 
 @bot.event
 async def on_ready():
     print(f"Bot is online: {bot.user}")
 
 @bot.command(name="email")
-@commands.cooldown(1, 45, commands.BucketType.user)
+@commands.cooldown(1, 60, commands.BucketType.user)
 async def email_cmd(ctx, email: str):
     if "@" not in email:
-        return await ctx.reply("Invalid email address.")
-    msg = await ctx.reply("Searching email... please wait ⏳")
+        return await ctx.reply("Invalid email.")
+    msg = await ctx.reply("Searching email (this may take 30-60 sec)...")
     try:
         result = await email_osint(email)
         await msg.edit(content=result)
@@ -92,9 +113,9 @@ async def email_cmd(ctx, email: str):
         await msg.edit(content=f"Error: {e}")
 
 @bot.command(name="user")
-@commands.cooldown(1, 45, commands.BucketType.user)
+@commands.cooldown(1, 60, commands.BucketType.user)
 async def user_cmd(ctx, username: str):
-    msg = await ctx.reply("Searching username... please wait ⏳")
+    msg = await ctx.reply("Searching username across tools (this may take 40-90 sec)...")
     try:
         result = await username_osint(username)
         await msg.edit(content=result)
