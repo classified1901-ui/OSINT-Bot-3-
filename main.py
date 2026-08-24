@@ -270,7 +270,6 @@ def discord_id_lookup(user_id):
         msg += "• https://discord.id/?id=" + str(uid) + "\n"
         msg += "• https://discordlookup.com/user/" + str(uid) + "\n"
         msg += "• https://discord.com/users/" + str(uid) + "\n\n"
-        msg += "Only public creation date + links. Cannot retrieve email or private data."
         return msg
     except Exception as e:
         return "Invalid Discord ID or error: " + str(e)
