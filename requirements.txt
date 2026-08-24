@@ -4,3 +4,5 @@ holehe
 sherlock-project
 maigret
 socialscan
+phonenumbers
+Faker
