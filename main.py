@@ -263,15 +263,14 @@ def discord_id_lookup(user_id):
         timestamp_ms = (uid >> 22) + 1420070400000
         created = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
         created_str = created.strftime("%Y-%m-%d %H:%M:%S UTC")
-        return (
-            f"**Discord User ID Lookup**\n\n"
-            f"**ID:** `{uid}`\n"
-            f"**Account Created:** {created_str}\n\n"
-            f"**Public Lookup Links:**\n"
-            f"• https://discord.id/?id={uid}\n"
-            f"• https://discordlookup.com/user/{uid}\n"
-            f"• https://discord.com/users/{uid}\n\n"
-            f"⚠️ Only public creation date + links. Cannot retrieve email or private data."
-        )
+        msg = "**Discord User ID Lookup**\n\n"
+        msg += f"**ID:** `{uid}`\n"
+        msg += f"**Account Created:** {created_str}\n\n"
+        msg += "**Public Lookup Links:**\n"
+        msg += f"• https://discord.id/?id={uid}\n"
+        msg += f"• https://discordlookup.com/user/{uid}\n"
+        msg += f"• https://discord.com/users/{uid}\n\n"
+        msg += "Only public creation date + links. Cannot retrieve email or private data."
+        return msg
     except Exception as e:
-        return f"❌ Invalid Discord ID or error: {e}"
+        return f"Invalid Discord ID or error: {e}"
